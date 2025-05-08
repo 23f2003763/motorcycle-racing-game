@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Endless Motorcycle Racing Game</title>
+  <style>
+    /* Basic reset and canvas styling */
+    body { margin: 0; background: #000; overflow: hidden; }
+    canvas { display: block; margin: 0 auto; background: #333; }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <script>
+  // Game Constants and Initial Setup
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  // Set canvas to fill the window initially
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  // Load car image
+  const carImage = new Image();
+  carImage.src = 'car.png';  // You'll need to provide this image
+
+  // Load player image
+  const playerImage = new Image();
+  playerImage.src = 'player.png';  // You'll need to provide this image
+
+  // Game constants
+  const ROAD_WIDTH = canvas.width * 0.8;
+  const ROAD_LEFT = (canvas.width - ROAD_WIDTH) / 2;
+  const MOVE_SPEED = 8;
+  const MIN_DISTANCE = 200;
+  const NITRO_MAX = 100;
+  const NITRO_DRAIN_RATE = 2;
+  const NITRO_REGEN_RATE = NITRO_MAX / (10 * 60);
+  const NITRO_BOOST = 1.5;
+  const BASE_SPEED = 4;
+  const RACE_DISTANCE = 40000;  // 40km in meters
+  const MINIMAP_SIZE = 200;
+  const MINIMAP_SCALE = 0.0025;  // Adjusted scale for 40km
+
+  // AI Players
+  const aiPlayers = [
+    {
+      x: ROAD_LEFT + ROAD_WIDTH * 0.25,
+      y: canvas.height - 100,
+      width: 72,
+      height: 108,
+      color: '#ff0',
+      distance: 0,
+      speed: BASE_SPEED,
+      name: "AI 1",
+      nitro: NITRO_MAX,
+      isBoosting: false,
+      eliminated: false,  // Add eliminated state
+      eliminatedPos: null // Store elimination position for minimap
+    },
+    {
+      x: ROAD_LEFT + ROAD_WIDTH * 0.75,
+      y: canvas.height - 100,
+      width: 72,
+      height: 108,
+      color: '#f0f',
+      distance: 0,
+      speed: BASE_SPEED,
+      name: "AI 2",
+      nitro: NITRO_MAX,
+      isBoosting: false,
+      eliminated: false,  // Add eliminated state
+      eliminatedPos: null // Store elimination position for minimap
+    }
+  ];
+
+  // Game state variables
+  let obstacles = [];
+  let speed = BASE_SPEED;
+  const minSpeed = 1;
+  const maxSpeed = 10;
+  const accel = 0.2;
+  const decel = 0.3;
+  let score = 0;
+  let highScore = 0;
+  let playerDistance = 0;  // Track player's distance
+  let gamePaused = false;  // For ESC menu
+  let raceFinished = false;  // Track if race is finished
+  // Load high score from previous sessions if available
+  const savedHigh = localStorage.getItem('highScore');
+  if (savedHigh) highScore = parseFloat(savedHigh);
+
+  // Control flags
+  let accelerating = false;
+  let braking = false;
+  let movingLeft = false;
+  let movingRight = false;
+  let gameRunning = false;
+  let gameStarted = false;
+  let gameOver = false;
+
+  // Score animation properties
+  let scoreAnimations = [];  // Array to store active score animations
+
+  // Player (motorcycle) properties
+  let player = {
+    width: 72,  // Doubled from 36
+    height: 108,  // Doubled from 54
+    x: canvas.width / 2,  // Start in center
+    y: canvas.height - 100,  // Near bottom
+    color: '#0f0',
+    nitro: NITRO_MAX,  // Current nitro level
+    isBoosting: false  // Whether nitro is being used
+  };
+
+  // Explosion effect state
+  let explosion = null; // {x, y, startTime, duration, finished}
+  let explosionObstacleIndex = null;
+
+  // Collision detection (player vs each obstacle)
+  let collisionDetected = false;
+  let collidedObstacleIndex = null;
+
+  // Draw initial instruction screen
+  function drawIntro() {
+    ctx.fillStyle = '#333';  // fill background
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.font = '28px sans-serif';
+    ctx.fillText('🏍️ Motorcycle Racing Game', canvas.width / 2, canvas.height / 2 - 50);
+    ctx.font = '18px sans-serif';
+    ctx.fillText('Use Arrow Keys — Left/Right to move, Up to accelerate, Down to brake', 
+                 canvas.width / 2, canvas.height / 2 - 10);
+    ctx.fillText('Press Enter to START', canvas.width / 2, canvas.height / 2 + 30);
+  }
+  drawIntro();
+
+  // Key Controls
+  document.addEventListener('keydown', function(e) {
+    if (!gameRunning) {
+      // If game not running, allow starting/restarting with Enter
+      if ((gameOver || !gameStarted) && e.key === 'Enter') {
+        startGame();
+        e.preventDefault();
+        return;
+      }
+    }
+    if (!gameRunning) return;  // ignore other keys if game is not active
+
+    // Handle movement keys during game
+    if (e.key === 'ArrowLeft') {
+      movingLeft = true;
+    } else if (e.key === 'ArrowRight') {
+      movingRight = true;
+    } else if (e.key === 'ArrowUp') {
+      accelerating = true;
+      // Start using nitro if available
+      if (player.nitro > 0) {
+        player.isBoosting = true;
+      }
+    } else if (e.key === 'ArrowDown') {
+      braking = true;
+    } else if (e.key === 'Escape') {
+      gamePaused = !gamePaused;
+    } else if (e.key === 'r' || e.key === 'R') {
+      if (gamePaused) {
+        startGame();
+      }
+    }
+    // Prevent page scroll on arrow keys
+    if (["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)) {
+      e.preventDefault();
+    }
+  });
+  document.addEventListener('keyup', function(e) {
+    if (e.key === 'ArrowLeft') {
+      movingLeft = false;
+    } else if (e.key === 'ArrowRight') {
+      movingRight = false;
+    } else if (e.key === 'ArrowUp') {
+      accelerating = false;
+      player.isBoosting = false;
+    } else if (e.key === 'ArrowDown') {
+      braking = false;
+    }
+  });
+
+  // Function to check if a position is safe to spawn an obstacle
+  function isPositionSafe(x) {
+    // Check if there's already an obstacle too close
+    for (let obs of obstacles) {
+      if (obs.y > -MIN_DISTANCE) {  // Only check obstacles that are visible or about to be
+        // Check if the new obstacle would overlap with existing ones
+        if (Math.abs(obs.x - x) < obs.width * 1.5) {  // 1.5x width as safety margin
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  // Spawn a new obstacle (vehicle)
+  function spawnObstacle() {
+    // Try to find a safe position
+    let attempts = 0;
+    let x;
+    do {
+      // Random position within road bounds
+      x = ROAD_LEFT + Math.random() * (ROAD_WIDTH - 40);  // 40 is obstacle width
+      attempts++;
+    } while (!isPositionSafe(x) && attempts < 10);
+
+    // If we couldn't find a safe position, don't spawn
+    if (attempts >= 10) return;
+
+    const obsWidth = 40;  // 60% smaller than before
+    const obsHeight = 60;  // 60% smaller than before
+    
+    obstacles.push({
+      x: x,
+      y: -obsHeight,  // start just above visible canvas
+      width: obsWidth,
+      height: obsHeight,
+      color: '#f00'
+    });
+  }
+
+  // Function to add a score animation
+  function addScoreAnimation(amount, x, y) {
+    // Check if there's already an animation at this position
+    const existingAnim = scoreAnimations.find(anim => 
+      Math.abs(anim.x - x) < 50 && Math.abs(anim.y - y) < 50
+    );
+
+    if (existingAnim) {
+      // If there is, combine the amounts and reset the animation
+      existingAnim.amount += amount;
+      existingAnim.life = 90;
+      existingAnim.alpha = 1;
+      existingAnim.scale = 1;
+    } else {
+      // If not, create a new animation with slight position offset
+      const offsetX = (Math.random() - 0.5) * 30;  // Random offset between -15 and 15
+      scoreAnimations.push({
+        amount: amount,
+        x: x + offsetX,
+        y: y,
+        alpha: 1,
+        life: 90,
+        scale: 1,
+        targetX: canvas.width / 2 + offsetX,  // Keep the offset in the target position
+        targetY: canvas.height / 2,
+        startX: x + offsetX,
+        startY: y
+      });
+    }
+  }
+
+  // Function to update AI players
+  function updateAI() {
+    for (let ai of aiPlayers) {
+      if (ai.eliminated) continue;  // Skip eliminated AIs
+
+      // Random movement within road bounds
+      ai.x += (Math.random() - 0.5) * 2;
+      ai.x = Math.max(ROAD_LEFT + ai.width/2, 
+             Math.min(ROAD_LEFT + ROAD_WIDTH - ai.width/2, ai.x));
+
+      // AI speed and nitro logic
+      if (Math.random() < 0.02) {  // 2% chance to change speed
+        ai.speed = BASE_SPEED + Math.random() * 4;
+      }
+      
+      // Use nitro occasionally
+      if (ai.nitro > 0 && Math.random() < 0.01) {  // 1% chance to use nitro
+        ai.isBoosting = true;
+        ai.speed *= NITRO_BOOST;
+        ai.nitro = Math.max(0, ai.nitro - NITRO_DRAIN_RATE);
+      } else {
+        ai.isBoosting = false;
+        ai.nitro = Math.min(NITRO_MAX, ai.nitro + NITRO_REGEN_RATE);
+      }
+
+      // Check for collisions with obstacles
+      for (let obs of obstacles) {
+        if (
+          obs.x - obs.width/2 < ai.x + ai.width/2 &&
+          obs.x + obs.width/2 > ai.x - ai.width/2 &&
+          obs.y < ai.y + ai.height &&
+          obs.y + obs.height > ai.y
+        ) {
+          // Eliminate AI on collision
+          ai.eliminated = true;
+          ai.eliminatedPos = { x: ai.x, distance: ai.distance };
+          break;
+        }
+      }
+
+      // Check for collisions with other AI players
+      for (let otherAI of aiPlayers) {
+        if (otherAI !== ai && !otherAI.eliminated) {
+          if (
+            otherAI.x - otherAI.width/2 < ai.x + ai.width/2 &&
+            otherAI.x + otherAI.width/2 > ai.x - ai.width/2 &&
+            otherAI.y < ai.y + ai.height &&
+            otherAI.y + otherAI.height > ai.y
+          ) {
+            // Adjust position on collision
+            if (ai.x < otherAI.x) {
+              ai.x -= 2;
+            } else {
+              ai.x += 2;
+            }
+            ai.speed = Math.max(minSpeed, ai.speed - 1);
+          }
+        }
+      }
+
+      // Update AI position based on speed
+      ai.y -= ai.speed - speed;
+      
+      // Update AI distance
+      ai.distance += ai.speed;
+    }
+  }
+
+  // Function to draw minimap
+  function drawMinimap() {
+    const mapX = 10;
+    const mapY = canvas.height - MINIMAP_SIZE - 10;
+    
+    // Draw minimap background with border
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(mapX - 2, mapY - 2, MINIMAP_SIZE + 4, MINIMAP_SIZE + 4);
+    ctx.fillStyle = '#404040';
+    ctx.fillRect(mapX, mapY, MINIMAP_SIZE, MINIMAP_SIZE);
+    
+    // Draw road on minimap
+    ctx.fillStyle = '#606060';
+    const roadWidth = MINIMAP_SIZE * 0.6;
+    const roadLeft = mapX + (MINIMAP_SIZE - roadWidth) / 2;
+    ctx.fillRect(roadLeft, mapY, roadWidth, MINIMAP_SIZE);
+    
+    // Draw start line
+    ctx.fillStyle = '#0f0';
+    ctx.fillRect(mapX, mapY + MINIMAP_SIZE - 2, MINIMAP_SIZE, 2);
+    
+    // Draw finish line
+    ctx.fillStyle = '#f00';
+    ctx.fillRect(mapX, mapY, MINIMAP_SIZE, 2);
+    
+    // Draw player position
+    const playerMapY = mapY + MINIMAP_SIZE - (playerDistance * MINIMAP_SCALE);
+    const playerMapX = roadLeft + (player.x - ROAD_LEFT) / ROAD_WIDTH * roadWidth;
+    
+    // Draw player
+    ctx.fillStyle = player.color;
+    ctx.beginPath();
+    ctx.arc(playerMapX, playerMapY, 4, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Draw AI players (only if not eliminated)
+    for (let ai of aiPlayers) {
+      if (!ai.eliminated) {
+        const aiMapY = mapY + MINIMAP_SIZE - (ai.distance * MINIMAP_SCALE);
+        const aiMapX = roadLeft + (ai.x - ROAD_LEFT) / ROAD_WIDTH * roadWidth;
+        ctx.fillStyle = ai.color;
+        ctx.beginPath();
+        ctx.arc(aiMapX, aiMapY, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Draw red cross for eliminated AIs
+    for (let ai of aiPlayers) {
+      if (ai.eliminated && ai.eliminatedPos) {
+        const aiMapY = mapY + MINIMAP_SIZE - (ai.eliminatedPos.distance * MINIMAP_SCALE);
+        const aiMapX = roadLeft + (ai.eliminatedPos.x - ROAD_LEFT) / ROAD_WIDTH * roadWidth;
+        ctx.save();
+        ctx.strokeStyle = '#f00';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(aiMapX - 6, aiMapY - 6);
+        ctx.lineTo(aiMapX + 6, aiMapY + 6);
+        ctx.moveTo(aiMapX + 6, aiMapY - 6);
+        ctx.lineTo(aiMapX - 6, aiMapY + 6);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Draw minimap legend
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('Start', mapX + 5, mapY + MINIMAP_SIZE - 5);
+    ctx.fillText('Finish', mapX + 5, mapY + 15);
+  }
+
+  // Function to draw ESC menu
+  function drawPauseMenu() {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.font = '36px sans-serif';
+    ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2 - 50);
+    
+    ctx.font = '24px sans-serif';
+    ctx.fillText('Press ESC to resume', canvas.width / 2, canvas.height / 2);
+    ctx.fillText('Press R to restart', canvas.width / 2, canvas.height / 2 + 40);
+  }
+
+  // Main Game Loop
+  let backgroundOffset = 0;
+  let distSinceSpawn = 0;
+  let nextSpawnDistance = 200;  // initial distance threshold for spawning
+  let lastScoreUpdate = 0;  // Track last score update time
+  function gameLoop() {
+    if (!gamePaused) {
+      // Clear and draw road background
+      ctx.fillStyle = '#606060';  // asphalt gray
+      ctx.fillRect(ROAD_LEFT, 0, ROAD_WIDTH, canvas.height);
+
+      // Draw road edges
+      ctx.strokeStyle = '#FFF';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(ROAD_LEFT, 0);
+      ctx.lineTo(ROAD_LEFT, canvas.height);
+      ctx.moveTo(ROAD_LEFT + ROAD_WIDTH, 0);
+      ctx.lineTo(ROAD_LEFT + ROAD_WIDTH, canvas.height);
+      ctx.stroke();
+
+      // Draw center line
+      ctx.setLineDash([20, 20]);
+      ctx.lineDashOffset = -backgroundOffset;
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2, 0);
+      ctx.lineTo(canvas.width / 2, canvas.height);
+      ctx.stroke();
+
+      // Update player position based on movement flags
+      if (movingLeft) {
+        player.x -= MOVE_SPEED;
+      }
+      if (movingRight) {
+        player.x += MOVE_SPEED;
+      }
+      // Keep player within road bounds
+      player.x = Math.max(ROAD_LEFT + player.width/2, 
+                 Math.min(ROAD_LEFT + ROAD_WIDTH - player.width/2, player.x));
+
+      // Update player speed based on acceleration/braking flags
+      if (accelerating) {
+        if (player.isBoosting && player.nitro > 0) {
+          // Use nitro boost
+          speed += accel * NITRO_BOOST;
+          player.nitro = Math.max(0, player.nitro - NITRO_DRAIN_RATE);
+          
+          // If nitro runs out, immediately return to normal speed
+          if (player.nitro <= 0) {
+            player.isBoosting = false;
+            speed = Math.min(speed, maxSpeed);  // Cap at normal max speed
+          }
+        } else {
+          // Normal acceleration
+          speed += accel;
+          player.isBoosting = false;
+        }
+        if (speed > maxSpeed) speed = maxSpeed;
+      } else {
+        // Regenerate nitro when not accelerating
+        player.nitro = Math.min(NITRO_MAX, player.nitro + NITRO_REGEN_RATE);
+        player.isBoosting = false;  // Ensure nitro is off when not accelerating
+      }
+      if (braking) {
+        speed -= decel;
+        if (speed < minSpeed) speed = minSpeed;
+      }
+
+      // Update score continuously based on speed
+      const currentTime = Date.now();
+      if (currentTime - lastScoreUpdate >= 100) {  // Update every 100ms
+        const scoreGain = Math.floor(speed * (player.isBoosting ? 2 : 1));
+        score += scoreGain;
+        // Only show animation when using nitro
+        if (player.isBoosting && player.nitro > 0) {
+          addScoreAnimation(scoreGain, player.x, player.y - 20);
+        }
+        lastScoreUpdate = currentTime;
+      }
+
+      // Update obstacle positions
+      for (let obs of obstacles) {
+        obs.y += speed;  // move down at the same speed as the road
+      }
+      // Remove obstacles that have moved off screen (past bottom)
+      obstacles = obstacles.filter(obs => obs.y < canvas.height + obs.height);
+
+      // Handle obstacle spawning based on distance traveled
+      distSinceSpawn += speed;
+      if (distSinceSpawn >= nextSpawnDistance) {
+        distSinceSpawn = 0;
+        // randomize next spawn distance a bit (e.g., 150 to 250)
+        nextSpawnDistance = 150 + Math.random() * 100;
+        spawnObstacle();
+      }
+
+      // Update background dash offset for scrolling effect
+      backgroundOffset = (backgroundOffset + speed) % 40;
+
+      // Collision detection (player vs each obstacle)
+      collisionDetected = false;
+      collidedObstacleIndex = null;
+      for (let i = 0; i < obstacles.length; i++) {
+        const obs = obstacles[i];
+        if (
+          obs.x - obs.width/2 < player.x + player.width/2 &&
+          obs.x + obs.width/2 > player.x - player.width/2 &&
+          obs.y < player.y + player.height &&
+          obs.y + obs.height > player.y
+        ) {
+          // Collision occurred - trigger explosion
+          collisionDetected = true;
+          collidedObstacleIndex = i;
+          break;
+        }
+      }
+      if (collisionDetected && !explosion) {
+        // Start explosion effect
+        explosion = {
+          x: player.x,
+          y: player.y + player.height/2,
+          startTime: performance.now(),
+          duration: 700, // ms
+          finished: false
+        };
+        explosionObstacleIndex = collidedObstacleIndex;
+      }
+
+      // Draw obstacles (skip the one involved in explosion if active)
+      for (let i = 0; i < obstacles.length; i++) {
+        if (explosion && i === explosionObstacleIndex) continue;
+        const obs = obstacles[i];
+        if (carImage.complete) {
+          ctx.drawImage(carImage, obs.x - obs.width/2, obs.y, obs.width, obs.height);
+        } else {
+          ctx.fillStyle = obs.color;
+          ctx.fillRect(obs.x - obs.width/2, obs.y, obs.width, obs.height);
+        }
+      }
+
+      // Draw nitro flame effects when boosting (only if not exploding)
+      if (!explosion && player.isBoosting && player.nitro > 0) {
+        // ... existing nitro flame code ...
+      }
+
+      // Draw player (skip if explosion is active)
+      if (!explosion) {
+        if (playerImage.complete) {
+          ctx.drawImage(playerImage, player.x - player.width/2, player.y, player.width, player.height);
+        } else {
+          ctx.fillStyle = player.color;
+          ctx.fillRect(player.x - player.width/2, player.y, player.width, player.height);
+        }
+      }
+
+      // Draw explosion effect if active (intense, deep colors, high flames)
+      if (explosion) {
+        const now = performance.now();
+        const elapsed = now - explosion.startTime;
+        const progress = Math.min(1, elapsed / explosion.duration);
+        const baseX = explosion.x;
+        const baseY = explosion.y;
+        // Draw multiple flame arcs for a more intense effect
+        for (let i = 0; i < 8; i++) {
+          ctx.save();
+          const angle = (Math.PI * 2 / 8) * i + progress * 2;
+          const flameLen = 80 + Math.sin(progress * Math.PI) * 120 + Math.random() * 20;
+          ctx.globalAlpha = 0.7 - progress * 0.7;
+          ctx.beginPath();
+          ctx.moveTo(baseX, baseY);
+          ctx.quadraticCurveTo(
+            baseX + Math.cos(angle) * flameLen * 0.4,
+            baseY + Math.sin(angle) * flameLen * 0.4 - 30 * progress,
+            baseX + Math.cos(angle) * flameLen,
+            baseY + Math.sin(angle) * flameLen - 60 * progress
+          );
+          ctx.strokeStyle =
+            i % 2 === 0 ? '#ff4500' : '#ffd700'; // orange-red and gold
+          ctx.lineWidth = 18 - progress * 10;
+          ctx.shadowColor = '#ffae00';
+          ctx.shadowBlur = 30;
+          ctx.stroke();
+          ctx.restore();
+        }
+        // Central blast
+        ctx.save();
+        const rad = 60 + progress * 80;
+        const grad = ctx.createRadialGradient(baseX, baseY, 0, baseX, baseY, rad);
+        grad.addColorStop(0, 'rgba(255,255,255,1)');
+        grad.addColorStop(0.2, 'rgba(255,200,0,0.9)');
+        grad.addColorStop(0.5, 'rgba(255,80,0,0.7)');
+        grad.addColorStop(0.8, 'rgba(120,0,0,0.4)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.globalAlpha = 1 - progress * 0.8;
+        ctx.beginPath();
+        ctx.arc(baseX, baseY, rad, 0, 2 * Math.PI);
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.restore();
+        // Shockwave ring
+        ctx.save();
+        ctx.globalAlpha = 0.5 - progress * 0.5;
+        ctx.beginPath();
+        ctx.arc(baseX, baseY, 40 + progress * 120, 0, 2 * Math.PI);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 6 - progress * 5;
+        ctx.shadowColor = '#fff';
+        ctx.shadowBlur = 20;
+        ctx.stroke();
+        ctx.restore();
+        // End explosion and game after duration
+        if (elapsed >= explosion.duration && !explosion.finished) {
+          explosion.finished = true;
+          endGame();
+          return;
+        }
+      }
+
+      // Update and draw score animations
+      for (let i = scoreAnimations.length - 1; i >= 0; i--) {
+        const anim = scoreAnimations[i];
+        const progress = 1 - (anim.life / 90);
+        
+        // Calculate current position with easing
+        anim.x = anim.startX + (anim.targetX - anim.startX) * progress;
+        anim.y = anim.startY + (anim.targetY - anim.startY) * progress;
+        
+        // Scale effect
+        anim.scale = 1 + progress * 2;
+        
+        // Fade out in the last 30% of animation
+        anim.alpha = progress < 0.7 ? 1 : 1 - ((progress - 0.7) / 0.3);
+        anim.life--;
+
+        if (anim.life <= 0) {
+          scoreAnimations.splice(i, 1);
+          continue;
+        }
+
+        ctx.save();
+        ctx.globalAlpha = anim.alpha;
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 4;
+        ctx.font = 'bold 36px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // Apply scale transform
+        ctx.translate(anim.x, anim.y);
+        ctx.scale(anim.scale, anim.scale);
+        ctx.translate(-anim.x, -anim.y);
+        
+        // Draw text with outline for better visibility
+        ctx.strokeText('+' + anim.amount, anim.x, anim.y);
+        ctx.fillText('+' + anim.amount, anim.x, anim.y);
+        ctx.restore();
+      }
+
+      // Draw total score with animation
+      ctx.fillStyle = '#fff';
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 4;
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 32px sans-serif';  // Increased font size
+      ctx.strokeText('Score: ' + Math.floor(score), 10, 40);
+      ctx.fillText('Score: ' + Math.floor(score), 10, 40);
+      ctx.textAlign = 'right';
+      ctx.strokeText('High: ' + Math.floor(highScore), canvas.width - 10, 40);
+      ctx.fillText('High: ' + Math.floor(highScore), canvas.width - 10, 40);
+
+      // Update player distance
+      playerDistance += speed;
+      
+      // Update AI players
+      updateAI();
+
+      // Check for race finish
+      if (!raceFinished) {
+        // Scenario 1: Player is eliminated (handled in collision detection)
+        
+        // Get active AIs
+        const activeAIs = aiPlayers.filter(ai => !ai.eliminated);
+        
+        // Scenario 2: Both AIs are eliminated and player is still in race
+        if (activeAIs.length === 0) {
+          raceFinished = true;
+          endGame();
+          return;
+        }
+        
+        // Scenario 3: At least one AI is present and player is present, and either reaches 40KM
+        if (activeAIs.length > 0) {
+          const hasReachedFinish = playerDistance >= RACE_DISTANCE || 
+                                 activeAIs.some(ai => ai.distance >= RACE_DISTANCE);
+          
+          if (hasReachedFinish) {
+            raceFinished = true;
+            endGame();
+            return;
+          }
+        }
+      }
+
+      // Draw minimap
+      drawMinimap();
+
+      // Draw AI players
+      for (let ai of aiPlayers) {
+        if (!ai.eliminated) {
+          if (playerImage.complete) {
+            ctx.drawImage(playerImage, ai.x - ai.width/2, ai.y, ai.width, ai.height);
+          } else {
+            ctx.fillStyle = ai.color;
+            ctx.fillRect(ai.x - ai.width/2, ai.y, ai.width, ai.height);
+          }
+        }
+      }
+
+      // Draw distance progress
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.font = '20px sans-serif';
+      ctx.fillText(`Distance: ${(playerDistance/1000).toFixed(1)}km / 40km`, canvas.width/2, 30);
+    } else {
+      drawPauseMenu();
+    }
+
+    // Loop again
+    if (gameRunning) {
+      requestAnimationFrame(gameLoop);
+    }
+  }
+
+  // Start or restart the game
+  function startGame() {
+    // Reset game state
+    obstacles = [];
+    score = 0;
+    speed = BASE_SPEED;
+    distSinceSpawn = 0;
+    nextSpawnDistance = 200;
+    player.x = canvas.width / 2;
+    player.y = canvas.height - 100;
+    player.nitro = NITRO_MAX;
+    player.isBoosting = false;
+    playerDistance = 0;
+    raceFinished = false;
+    
+    // Reset AI players
+    for (let ai of aiPlayers) {
+      ai.x = ROAD_LEFT + ROAD_WIDTH * (ai === aiPlayers[0] ? 0.25 : 0.75);
+      ai.y = canvas.height - 100;
+      ai.distance = 0;
+      ai.speed = BASE_SPEED;
+      ai.nitro = NITRO_MAX;
+      ai.isBoosting = false;
+      ai.eliminated = false;  // Reset eliminated state
+      ai.eliminatedPos = null; // Reset eliminated position
+    }
+    
+    accelerating = false;
+    braking = false;
+    movingLeft = false;
+    movingRight = false;
+    gameOver = false;
+    gamePaused = false;
+    if (!gameStarted) gameStarted = true;
+    gameRunning = true;
+    // Reset explosion state
+    explosion = null;
+    explosionObstacleIndex = null;
+    // Start the game loop
+    requestAnimationFrame(gameLoop);
+  }
+
+  // End the game and show Game Over screen
+  function endGame() {
+    gameRunning = false;
+    gameOver = true;
+    
+    // Calculate final positions
+    const positions = [
+      { name: "You", distance: playerDistance, eliminated: false },
+      ...aiPlayers.map(ai => ({ name: ai.name, distance: ai.distance, eliminated: ai.eliminated }))
+    ].sort((a, b) => {
+      if (a.eliminated && !b.eliminated) return 1;
+      if (!a.eliminated && b.eliminated) return -1;
+      return b.distance - a.distance;
+    });
+    
+    // Update high score if needed
+    if (Math.floor(score) > Math.floor(highScore)) {
+      highScore = score;
+      localStorage.setItem('highScore', highScore.toString());
+    }
+    
+    // Draw game over screen
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.font = '36px sans-serif';
+    ctx.fillText('RACE FINISHED', canvas.width / 2, canvas.height / 2 - 100);
+    
+    // Draw final positions
+    ctx.font = '24px sans-serif';
+    positions.forEach((pos, index) => {
+      const distance = Math.min(pos.distance, RACE_DISTANCE);
+      const status = pos.eliminated ? " (Eliminated)" : "";
+      ctx.fillText(`${index + 1}. ${pos.name}: ${(distance/1000).toFixed(1)}km${status}`, 
+                   canvas.width / 2, canvas.height / 2 - 40 + index * 30);
+    });
+    
+    ctx.font = '20px sans-serif';
+    ctx.fillText('Press Enter to restart', canvas.width / 2, canvas.height / 2 + 100);
+  }
+
+  // Optional Sound: simple beep using Web Audio API
+  let audioCtx;
+  function playSound(freq, duration) {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    const oscillator = audioCtx.createOscillator();
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    oscillator.connect(audioCtx.destination);
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + duration);
+  }
+
+  // Handle browser window resizing for responsiveness
+  window.addEventListener('resize', function() {
+    // Re-size canvas
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    // Update road dimensions
+    ROAD_WIDTH = canvas.width * 0.8;
+    ROAD_LEFT = (canvas.width - ROAD_WIDTH) / 2;
+    // Reposition player
+    player.x = Math.min(Math.max(player.x, ROAD_LEFT + player.width/2), 
+                       ROAD_LEFT + ROAD_WIDTH - player.width/2);
+    player.y = canvas.height - 100;
+    // Clear obstacles (to avoid misalignment after resize)
+    obstacles = [];
+    // Redraw intro or current frame
+    if (!gameStarted || gameOver) {
+      drawIntro();
+    }
+  });
+  </script>
+</body>
+</html> 
