@@ -51,6 +51,10 @@
     <button class="touch-btn" id="btn-brake">▼</button>
     <button class="touch-btn" id="btn-right">⟶</button>
   </div>
+  <!-- Start/Restart button overlay -->
+  <div id="start-btn-overlay" style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);">
+    <button id="start-btn" style="font-size:2.2em;padding:0.7em 2.5em;border-radius:18px;border:2px solid #fff;background:#222;color:#fff;box-shadow:0 2px 12px #000a;">Start</button>
+  </div>
   <script>
   // Game Constants and Initial Setup
   const canvas = document.getElementById('gameCanvas');
@@ -160,6 +164,23 @@
   let collisionDetected = false;
   let collidedObstacleIndex = null;
 
+  // Start/Restart button logic
+  const startBtnOverlay = document.getElementById('start-btn-overlay');
+  const startBtn = document.getElementById('start-btn');
+  function showStartBtn(text = 'Start') {
+    startBtn.textContent = text;
+    startBtnOverlay.style.display = 'flex';
+  }
+  function hideStartBtn() {
+    startBtnOverlay.style.display = 'none';
+  }
+  startBtn.onclick = function() {
+    hideStartBtn();
+    startGame();
+  };
+  // Show start button on load
+  showStartBtn('Start');
+
   // Draw initial instruction screen
   function drawIntro() {
     ctx.fillStyle = '#333';  // fill background
@@ -171,21 +192,13 @@
     ctx.font = '18px sans-serif';
     ctx.fillText('Use Arrow Keys — Left/Right to move, Up to accelerate, Down to brake', 
                  canvas.width / 2, canvas.height / 2 - 10);
-    ctx.fillText('Press Enter to START', canvas.width / 2, canvas.height / 2 + 30);
+    ctx.fillText('Press the button below to START', canvas.width / 2, canvas.height / 2 + 30);
   }
   drawIntro();
 
   // Key Controls
   document.addEventListener('keydown', function(e) {
-    if (!gameRunning) {
-      // If game not running, allow starting/restarting with Enter
-      if ((gameOver || !gameStarted) && e.key === 'Enter') {
-        startGame();
-        e.preventDefault();
-        return;
-      }
-    }
-    if (!gameRunning) return;  // ignore other keys if game is not active
+    if (!gameRunning) return;  // ignore keys if game is not active
 
     // Handle movement keys during game
     if (e.key === 'ArrowLeft') {
@@ -867,7 +880,8 @@
     });
     
     ctx.font = '20px sans-serif';
-    ctx.fillText('Press Enter to restart', canvas.width / 2, canvas.height / 2 + 100);
+    ctx.fillText('Press the button below to restart', canvas.width / 2, canvas.height / 2 + 100);
+    showStartBtn('Restart');
   }
 
   // Optional Sound: simple beep using Web Audio API
