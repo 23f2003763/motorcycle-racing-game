@@ -53,7 +53,8 @@
   </div>
   <!-- Start/Restart button overlay -->
   <div id="start-btn-overlay" style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:2000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);">
-    <button id="start-btn" style="font-size:2.2em;padding:0.7em 2.5em;border-radius:18px;border:2px solid #fff;background:#222;color:#fff;box-shadow:0 2px 12px #000a;">Start</button>
+    <div style="position:absolute;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.7);"></div>
+    <button id="start-btn" style="position:relative;font-size:2.2em;padding:0.7em 2.5em;border-radius:18px;border:2px solid #fff;background:#222;color:#fff;box-shadow:0 2px 12px #000a;z-index:1;">Start</button>
   </div>
   <script>
   // Game Constants and Initial Setup
@@ -882,6 +883,10 @@
     ctx.font = '20px sans-serif';
     ctx.fillText('Press the button below to restart', canvas.width / 2, canvas.height / 2 + 100);
     showStartBtn('Restart');
+    // Party effect if player wins
+    if (positions[0].name === "You" && !positions[0].eliminated && positions[0].distance >= RACE_DISTANCE) {
+      triggerPartyEffect();
+    }
   }
 
   // Optional Sound: simple beep using Web Audio API
@@ -928,29 +933,137 @@
   if (isMobile()) {
     touchControls.style.display = 'flex';
   }
-  // Touch event handlers
-  function setTouchBtn(id, flag, value) {
-    if (id === 'btn-left') movingLeft = value;
-    if (id === 'btn-right') movingRight = value;
-    if (id === 'btn-accel') {
-      accelerating = value;
-      if (value && player.nitro > 0) player.isBoosting = true;
-      if (!value) player.isBoosting = false;
+  // Gyroscope controls for mobile/tablet
+  let gyroActive = false;
+  let gyroTouchOverride = false;
+  if (isMobile() && window.DeviceOrientationEvent) {
+    // Request permission for iOS 13+
+    function enableGyro() {
+      if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission().then(function(permissionState) {
+          if (permissionState === 'granted') {
+            window.addEventListener('deviceorientation', handleGyro, true);
+            gyroActive = true;
+          }
+        }).catch(console.error);
+      } else {
+        window.addEventListener('deviceorientation', handleGyro, true);
+        gyroActive = true;
+      }
     }
-    if (id === 'btn-brake') braking = value;
+    // Enable on first user interaction
+    window.addEventListener('touchstart', enableGyro, { once: true });
   }
+
+  function handleGyro(event) {
+    if (gyroTouchOverride) return;
+    // gamma: left/right tilt (-90 to 90)
+    // beta: front/back tilt (-180 to 180)
+    const gamma = event.gamma || 0;
+    const beta = event.beta || 0;
+    // Left/right
+    movingLeft = gamma < -10;
+    movingRight = gamma > 10;
+    // Forward/backward
+    accelerating = beta < 60; // phone tilted forward
+    braking = beta > 100;     // phone tilted backward
+    // Nitro boost logic
+    if (accelerating && player.nitro > 0) player.isBoosting = true;
+    if (!accelerating) player.isBoosting = false;
+  }
+
+  // If user is touching a control, ignore gyro
   ['btn-left','btn-right','btn-accel','btn-brake'].forEach(id => {
     const btn = document.getElementById(id);
-    btn.addEventListener('touchstart', e => { setTouchBtn(id, true, true); e.preventDefault(); });
-    btn.addEventListener('touchend', e => { setTouchBtn(id, false, false); e.preventDefault(); });
-    btn.addEventListener('mousedown', e => { setTouchBtn(id, true, true); });
-    btn.addEventListener('mouseup', e => { setTouchBtn(id, false, false); });
-    btn.addEventListener('mouseleave', e => { setTouchBtn(id, false, false); });
+    btn.addEventListener('touchstart', e => { gyroTouchOverride = true; });
+    btn.addEventListener('touchend', e => { gyroTouchOverride = false; });
+    btn.addEventListener('mousedown', e => { gyroTouchOverride = true; });
+    btn.addEventListener('mouseup', e => { gyroTouchOverride = false; });
+    btn.addEventListener('mouseleave', e => { gyroTouchOverride = false; });
   });
   // Prevent scrolling/zooming on mobile while playing
   document.body.addEventListener('touchmove', function(e) {
     if (gameRunning) e.preventDefault();
   }, { passive: false });
+
+  // Balloon/confetti party effect
+  let partyBalloons = [];
+  let partyConfetti = [];
+  function triggerPartyEffect() {
+    // Balloons
+    partyBalloons = [];
+    for (let i = 0; i < 12; i++) {
+      partyBalloons.push({
+        x: canvas.width * (0.1 + 0.8 * Math.random()),
+        y: canvas.height + 60 + Math.random() * 80,
+        color: `hsl(${Math.floor(Math.random()*360)},90%,60%)`,
+        speed: 1.5 + Math.random() * 1.5,
+        sway: Math.random() * 2 * Math.PI,
+        swaySpeed: 0.01 + Math.random() * 0.02
+      });
+    }
+    // Confetti
+    partyConfetti = [];
+    for (let i = 0; i < 60; i++) {
+      partyConfetti.push({
+        x: canvas.width * Math.random(),
+        y: -20 - Math.random() * 40,
+        color: `hsl(${Math.floor(Math.random()*360)},90%,60%)`,
+        speed: 2 + Math.random() * 2,
+        angle: Math.random() * 2 * Math.PI,
+        spin: (Math.random() - 0.5) * 0.2
+      });
+    }
+    requestAnimationFrame(drawPartyEffect);
+  }
+
+  function drawPartyEffect() {
+    // Balloons
+    for (let b of partyBalloons) {
+      b.y -= b.speed;
+      b.x += Math.sin(b.sway) * 0.8;
+      b.sway += b.swaySpeed;
+      // Balloon string
+      ctx.save();
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y + 30);
+      ctx.lineTo(b.x, b.y + 60);
+      ctx.stroke();
+      ctx.restore();
+      // Balloon
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(b.x, b.y, 18, 28, 0, 0, 2 * Math.PI);
+      ctx.fillStyle = b.color;
+      ctx.globalAlpha = 0.9;
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 1;
+      ctx.stroke();
+      ctx.restore();
+    }
+    // Confetti
+    for (let c of partyConfetti) {
+      c.y += c.speed;
+      c.angle += c.spin;
+      ctx.save();
+      ctx.translate(c.x, c.y);
+      ctx.rotate(c.angle);
+      ctx.fillStyle = c.color;
+      ctx.fillRect(-4, -2, 8, 4);
+      ctx.restore();
+    }
+    // Remove off-screen balloons/confetti
+    partyBalloons = partyBalloons.filter(b => b.y > -40);
+    partyConfetti = partyConfetti.filter(c => c.y < canvas.height + 20);
+    // Continue animation if any left
+    if (partyBalloons.length > 0 || partyConfetti.length > 0) {
+      requestAnimationFrame(drawPartyEffect);
+    }
+  }
   </script>
 </body>
 </html> 
